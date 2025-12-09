@@ -11,6 +11,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 import open_clip
 import requests
+from sklearn.cluster import KMeans
 
 # ---------- Paths & config ----------
 
@@ -215,6 +216,46 @@ def sample_test_images(n: int) -> List[str]:
     return list(rng.choice(imgs, size=n, replace=False))
 
 
+# def rank_candidates_for_anchor(
+#     clip_model,
+#     preprocess,
+#     classifier,
+#     anchor_img: Image.Image,
+#     candidate_paths: List[str],
+#     top_k: int = 8,
+# ) -> List[Dict]:
+#     """
+#     Given an anchor image and a list of candidate image filenames (under IMAGES_DIR),
+#     return a ranked list of candidates with compatibility scores.
+#     """
+#     # Encode anchor once
+#     anchor_emb = encode_single_image(clip_model, preprocess, anchor_img)  # (1, D)
+
+#     results = []
+#     for rel_path in candidate_paths:
+#         img_path = IMAGES_DIR / rel_path
+#         if not img_path.exists():
+#             continue
+#         img = Image.open(img_path).convert("RGB")
+#         cand_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
+
+#         cos_sim = torch.nn.functional.cosine_similarity(anchor_emb, cand_emb).item()
+#         with torch.no_grad():
+#             logit = classifier(anchor_emb, cand_emb)
+#             prob = torch.sigmoid(logit).item()
+
+#         results.append(
+#             {
+#                 "path": rel_path,
+#                 "cos_sim": float(cos_sim),
+#                 "prob": float(prob),
+#             }
+#         )
+
+#     # Sort by probability desc
+#     results.sort(key=lambda x: x["prob"], reverse=True)
+#     return results[:top_k]
+
 def rank_candidates_for_anchor(
     clip_model,
     preprocess,
@@ -222,39 +263,84 @@ def rank_candidates_for_anchor(
     anchor_img: Image.Image,
     candidate_paths: List[str],
     top_k: int = 8,
+    desired_style: Optional[str] = None,
+    prob_weight: float = 0.7,
+    sim_weight: float = 0.2,
+    style_weight: float = 0.1,
 ) -> List[Dict]:
     """
-    Given an anchor image and a list of candidate image filenames (under IMAGES_DIR),
-    return a ranked list of candidates with compatibility scores.
+    Given an anchor image and a list of candidate image *relative paths*,
+    rank candidates by a combined score:
+
+        final_score = prob_weight * compat_prob
+                    + sim_weight  * clip_cosine_similarity
+                    + style_weight * style_alignment    (if desired_style is not None)
+
+    Returns a list of dicts sorted by final_score descending, each with:
+        {
+            "path": str,
+            "prob": float,
+            "cos_sim": float,
+            "style_score": Optional[float],
+            "final_score": float,
+        }
     """
-    # Encode anchor once
+    # 1) Encode anchor image once
     anchor_emb = encode_single_image(clip_model, preprocess, anchor_img)  # (1, D)
 
+    # 2) If style is requested, prepare a text embedding for that style
+    style_emb = None
+    if desired_style is not None:
+        style_key = desired_style.lower()
+        if style_key in STYLE_PROMPTS:
+            prompt = STYLE_PROMPTS[style_key]
+        else:
+            prompt = f"an outfit in {style_key} style"
+
+        text_embs = _encode_text_prompts(clip_model, [prompt])  # (1, D)
+        style_emb = text_embs[0:1]  # keep batch dim
+
     results = []
-    for rel_path in candidate_paths:
-        img_path = IMAGES_DIR / rel_path
-        if not img_path.exists():
-            continue
-        img = Image.open(img_path).convert("RGB")
-        cand_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
 
-        cos_sim = torch.nn.functional.cosine_similarity(anchor_emb, cand_emb).item()
-        with torch.no_grad():
+    with torch.no_grad():
+        for rel_path in candidate_paths:
+            img_path = IMAGES_DIR / rel_path
+            if not img_path.exists():
+                continue
+
+            img = Image.open(img_path).convert("RGB")
+            cand_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
+
+            # CLIP cosine sim
+            cos_sim = float((anchor_emb @ cand_emb.T).item())
+
+            # Compatibility probability via classifier
             logit = classifier(anchor_emb, cand_emb)
-            prob = torch.sigmoid(logit).item()
+            prob = float(torch.sigmoid(logit).item())
 
-        results.append(
-            {
-                "path": rel_path,
-                "cos_sim": float(cos_sim),
-                "prob": float(prob),
-            }
-        )
+            # Optional style alignment
+            style_score = None
+            if style_emb is not None:
+                style_score = float((cand_emb @ style_emb.T).item())
 
-    # Sort by probability desc
-    results.sort(key=lambda x: x["prob"], reverse=True)
+            # Final score
+            final = prob_weight * prob + sim_weight * cos_sim
+            if style_score is not None:
+                final += style_weight * style_score
+
+            results.append(
+                {
+                    "path": rel_path,
+                    "prob": prob,
+                    "cos_sim": cos_sim,
+                    "style_score": style_score,
+                    "final_score": final,
+                }
+            )
+
+    # Sort by final_score descending
+    results.sort(key=lambda r: r["final_score"], reverse=True)
     return results[:top_k]
-
 
 def score_outfit(
     clip_model,
@@ -298,8 +384,122 @@ def score_outfit(
 
     return probs, outfit_score
 
+# ---------- Style & color analysis helpers ----------
 
-# ---------- Optional: Ollama LLM helper ----------
+# Simple global style prompts; you can tweak wording later.
+STYLE_PROMPTS: Dict[str, str] = {
+    "casual": "a casual everyday outfit",
+    "formal": "a formal elegant outfit",
+    "streetwear": "a streetwear style outfit",
+    "sporty": "a sporty athletic outfit",
+    "minimal": "a minimalist neutral-tone outfit",
+    "party": "a party or going-out outfit",
+}
+
+
+def _encode_text_prompts(clip_model, prompts: List[str]) -> torch.Tensor:
+    """
+    Encode a list of text prompts using open_clip tokenizer + CLIP text encoder.
+    Returns L2-normalized text embeddings of shape (N, D).
+    """
+    tokenizer = open_clip.get_tokenizer("ViT-B-32")
+    tokens = tokenizer(prompts).to(DEVICE)
+
+    with torch.no_grad():
+        text_emb = clip_model.encode_text(tokens)
+
+    text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
+    return text_emb  # (N, D)
+
+
+def analyze_style(
+    clip_model,
+    preprocess,
+    img: Image.Image,
+    style_prompts: Optional[Dict[str, str]] = None,
+) -> List[Dict]:
+    """
+    Given a single item image, compute similarity to a set of style prompts
+    using CLIP image-text similarity.
+
+    Returns a list of dicts:
+        [{ "name": "casual", "score": 0.83, "prob": 0.29 }, ...]
+    where:
+        - score: cosine similarity (raw)
+        - prob: softmax over all styles (rough 'percentage' of style)
+    """
+    if style_prompts is None:
+        style_prompts = STYLE_PROMPTS
+
+    # 1) Encode image
+    img_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
+
+    # 2) Encode text prompts
+    names = list(style_prompts.keys())
+    prompts = [style_prompts[n] for n in names]
+    text_embs = _encode_text_prompts(clip_model, prompts)       # (K, D)
+
+    # 3) Cosine similarity image vs each text prompt
+    with torch.no_grad():
+        sims = (img_emb @ text_embs.T).squeeze(0).cpu().numpy()  # (K,)
+
+    # 4) Softmax over sims for nicer percentages
+    # small temperature to spread distribution a bit
+    temp = 0.07
+    exps = np.exp(sims / temp)
+    probs = exps / exps.sum()
+
+    results = []
+    for name, s, p in zip(names, sims, probs):
+        results.append(
+            {
+                "name": name,
+                "score": float(s),
+                "prob": float(p),
+            }
+        )
+
+    # sort by probability descending
+    results.sort(key=lambda x: x["prob"], reverse=True)
+    return results
+
+
+def extract_color_palette(
+    img: Image.Image,
+    n_colors: int = 3,
+    sample_size: int = 5000,
+) -> List[Dict]:
+    """
+    Extract a small color palette from the image using KMeans in RGB space.
+
+    Returns a list of dicts:
+        [{ "rgb": (r, g, b), "hex": "#rrggbb" }, ...]
+    """
+    # Resize for speed
+    img_small = img.resize((128, 128))
+    arr = np.array(img_small)  # (H, W, 3)
+    arr = arr.reshape(-1, 3)
+
+    # Optional subsample for speed
+    if arr.shape[0] > sample_size:
+        idx = np.random.choice(arr.shape[0], size=sample_size, replace=False)
+        arr = arr[idx]
+
+    # Run KMeans
+    kmeans = KMeans(n_clusters=n_colors, n_init=5, random_state=42)
+    kmeans.fit(arr)
+    centers = kmeans.cluster_centers_.astype(int)  # (n_colors, 3)
+
+    palette = []
+    for c in centers:
+        r, g, b = [int(x) for x in c.tolist()]
+        hex_code = "#{:02X}{:02X}{:02X}".format(r, g, b)
+        palette.append({"rgb": (r, g, b), "hex": hex_code})
+
+    return palette
+
+
+# ---------- Ollama LLM helper ----------
 
 def call_ollama(
     prompt: str,

@@ -18,3 +18,26 @@ models/*.pth
 
 # Streamlit cache
 .streamlit/
+
+# ignore media
+*.mp4
+*.webm
+*.mov
+*.zip
+
+# ignore temp files
+*.pdf
+*.aux
+*.log
+*.out
+*.json
+
+# ignore test images
+test_imgs/
+
+# ignore model weights
+models/*.pt
+
+# ignore latex build
+build/
+
