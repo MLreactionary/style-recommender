@@ -13,14 +13,12 @@ import open_clip
 import requests
 from sklearn.cluster import KMeans
 
-# ---------- Paths & config ----------
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 
-# Raw Polyvore dataset root (your Kaggle layout)
+# Polyvore dataset
 RAW_POLY_DIR = DATA_DIR / "raw" / "polyvore_outfits"
-IMAGES_DIR = RAW_POLY_DIR / "images"   # all item images live here
+IMAGES_DIR = RAW_POLY_DIR / "images"  
 PAIRS_CSV = DATA_DIR / "pairs.csv"
 
 MODELS_DIR = PROJECT_ROOT / "models"
@@ -29,8 +27,6 @@ MODEL_PATH = MODELS_DIR / "compat_mlp.pt"
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-
-# ---------- CLIP via open_clip ----------
 
 def load_clip_model():
     """
@@ -42,14 +38,11 @@ def load_clip_model():
     model.eval()
     model.to(DEVICE)
 
-    # freeze CLIP
+    # freezing CLIP
     for p in model.parameters():
         p.requires_grad = False
 
     return model, preprocess
-
-
-# ---------- Dataset for training ----------
 
 class PairDataset(Dataset):
     """
@@ -77,7 +70,7 @@ class PairDataset(Dataset):
         img2 = self._load_image(row["img2"])
         label = float(row["label"])
 
-        # open_clip preprocess returns a (3,H,W) tensor
+        # open_clip returns a (3,H,W) tensor
         pv1 = self.preprocess(img1)
         pv2 = self.preprocess(img2)
 
@@ -87,8 +80,6 @@ class PairDataset(Dataset):
             "label": label,
         }
 
-
-# ---------- Compatibility MLP ----------
 
 class CompatibilityMLP(nn.Module):
     """
@@ -114,16 +105,14 @@ class CompatibilityMLP(nn.Module):
         prod = emb1 * emb2
         x = torch.cat([emb1, emb2, diff, prod], dim=-1)
         logit = self.net(x)
-        return logit.squeeze(-1)  # (B,)
+        return logit.squeeze(-1)  
 
-
-# ---------- Shared helpers ----------
 
 def compute_batch_embeddings(clip_model, batch):
     """
     Given a batch from PairDataset, compute normalized image embeddings.
     """
-    pv1 = batch["pixel_values1"].to(DEVICE)  # (B,3,H,W)
+    pv1 = batch["pixel_values1"].to(DEVICE)  
     pv2 = batch["pixel_values2"].to(DEVICE)
 
     with torch.no_grad():
@@ -139,13 +128,13 @@ def encode_single_image(clip_model, preprocess, img: Image.Image) -> torch.Tenso
     """
     Encode a single PIL image into a normalized CLIP embedding.
     """
-    pixel_values = preprocess(img).unsqueeze(0).to(DEVICE)  # (1,3,H,W)
+    pixel_values = preprocess(img).unsqueeze(0).to(DEVICE)  
 
     with torch.no_grad():
         emb = clip_model.encode_image(pixel_values)
 
     emb = emb / emb.norm(dim=-1, keepdim=True)
-    return emb  # (1, D)
+    return emb  
 
 
 def load_trained_models_for_inference():
@@ -184,9 +173,6 @@ def predict_pair(
         prob = torch.sigmoid(logit).item()
 
     return cos_sim, prob
-
-
-# ---------- New: dataset utilities for recommendation ----------
 
 def load_pairs_df() -> pd.DataFrame:
     """Load pairs.csv once."""
@@ -285,10 +271,10 @@ def rank_candidates_for_anchor(
             "final_score": float,
         }
     """
-    # 1) Encode anchor image once
+    # 1) Encoding anchor image 
     anchor_emb = encode_single_image(clip_model, preprocess, anchor_img)  # (1, D)
 
-    # 2) If style is requested, prepare a text embedding for that style
+    # 2) If style is requested, we prepare a text embedding for that style
     style_emb = None
     if desired_style is not None:
         style_key = desired_style.lower()
@@ -297,8 +283,8 @@ def rank_candidates_for_anchor(
         else:
             prompt = f"an outfit in {style_key} style"
 
-        text_embs = _encode_text_prompts(clip_model, [prompt])  # (1, D)
-        style_emb = text_embs[0:1]  # keep batch dim
+        text_embs = _encode_text_prompts(clip_model, [prompt])  
+        style_emb = text_embs[0:1]  
 
     results = []
 
@@ -309,21 +295,17 @@ def rank_candidates_for_anchor(
                 continue
 
             img = Image.open(img_path).convert("RGB")
-            cand_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
+            cand_emb = encode_single_image(clip_model, preprocess, img)  
 
-            # CLIP cosine sim
             cos_sim = float((anchor_emb @ cand_emb.T).item())
 
-            # Compatibility probability via classifier
             logit = classifier(anchor_emb, cand_emb)
             prob = float(torch.sigmoid(logit).item())
 
-            # Optional style alignment
             style_score = None
             if style_emb is not None:
                 style_score = float((cand_emb @ style_emb.T).item())
 
-            # Final score
             final = prob_weight * prob + sim_weight * cos_sim
             if style_score is not None:
                 final += style_weight * style_score
@@ -338,7 +320,6 @@ def rank_candidates_for_anchor(
                 }
             )
 
-    # Sort by final_score descending
     results.sort(key=lambda r: r["final_score"], reverse=True)
     return results[:top_k]
 
@@ -356,11 +337,11 @@ def score_outfit(
     n = len(images)
     assert n >= 2, "Need at least 2 items to score an outfit."
 
-    # Encode all images once
+    # Encoding all images once
     embs = []
     for img in images:
         embs.append(encode_single_image(clip_model, preprocess, img))
-    embs = torch.cat(embs, dim=0)  # (N, D)
+    embs = torch.cat(embs, dim=0)
 
     # pairwise matrix
     probs = np.ones((n, n), dtype=np.float32)
@@ -375,7 +356,7 @@ def score_outfit(
                 probs[i, j] = p
                 probs[j, i] = p
 
-    # overall outfit score: mean of upper triangle excluding diagonal
+    # overall outfit score - mean of upper triangle excluding diagonal
     if n > 1:
         triu_indices = np.triu_indices(n, k=1)
         outfit_score = float(probs[triu_indices].mean())
@@ -384,9 +365,6 @@ def score_outfit(
 
     return probs, outfit_score
 
-# ---------- Style & color analysis helpers ----------
-
-# Simple global style prompts; you can tweak wording later.
 STYLE_PROMPTS: Dict[str, str] = {
     "casual": "a casual everyday outfit",
     "formal": "a formal elegant outfit",
@@ -409,7 +387,7 @@ def _encode_text_prompts(clip_model, prompts: List[str]) -> torch.Tensor:
         text_emb = clip_model.encode_text(tokens)
 
     text_emb = text_emb / text_emb.norm(dim=-1, keepdim=True)
-    return text_emb  # (N, D)
+    return text_emb  
 
 
 def analyze_style(
@@ -431,20 +409,19 @@ def analyze_style(
     if style_prompts is None:
         style_prompts = STYLE_PROMPTS
 
-    # 1) Encode image
-    img_emb = encode_single_image(clip_model, preprocess, img)  # (1, D)
+    # 1) Encoding image
+    img_emb = encode_single_image(clip_model, preprocess, img)  
 
-    # 2) Encode text prompts
+    # 2) Encoding text prompts
     names = list(style_prompts.keys())
     prompts = [style_prompts[n] for n in names]
-    text_embs = _encode_text_prompts(clip_model, prompts)       # (K, D)
+    text_embs = _encode_text_prompts(clip_model, prompts)       
 
     # 3) Cosine similarity image vs each text prompt
     with torch.no_grad():
-        sims = (img_emb @ text_embs.T).squeeze(0).cpu().numpy()  # (K,)
+        sims = (img_emb @ text_embs.T).squeeze(0).cpu().numpy()  
 
     # 4) Softmax over sims for nicer percentages
-    # small temperature to spread distribution a bit
     temp = 0.07
     exps = np.exp(sims / temp)
     probs = exps / exps.sum()
@@ -475,12 +452,11 @@ def extract_color_palette(
     Returns a list of dicts:
         [{ "rgb": (r, g, b), "hex": "#rrggbb" }, ...]
     """
-    # Resize for speed
+    # Resizing for speed
     img_small = img.resize((128, 128))
-    arr = np.array(img_small)  # (H, W, 3)
+    arr = np.array(img_small)  
     arr = arr.reshape(-1, 3)
 
-    # Optional subsample for speed
     if arr.shape[0] > sample_size:
         idx = np.random.choice(arr.shape[0], size=sample_size, replace=False)
         arr = arr[idx]
@@ -488,7 +464,7 @@ def extract_color_palette(
     # Run KMeans
     kmeans = KMeans(n_clusters=n_colors, n_init=5, random_state=42)
     kmeans.fit(arr)
-    centers = kmeans.cluster_centers_.astype(int)  # (n_colors, 3)
+    centers = kmeans.cluster_centers_.astype(int) 
 
     palette = []
     for c in centers:
@@ -497,9 +473,6 @@ def extract_color_palette(
         palette.append({"rgb": (r, g, b), "hex": hex_code})
 
     return palette
-
-
-# ---------- Ollama LLM helper ----------
 
 def call_ollama(
     prompt: str,
@@ -525,6 +498,5 @@ def call_ollama(
         data = resp.json()
         return data.get("message", {}).get("content", "").strip()
     except Exception as e:
-        # We don't want the whole app to crash if Ollama isn't running.
         print(f"[Ollama] Error calling model: {e}")
         return None
