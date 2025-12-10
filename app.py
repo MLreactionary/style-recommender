@@ -22,13 +22,6 @@ from core import (
 st.set_page_config(page_title="Fashion CLIP Stylist", layout="wide")
 st.title("Stylo AI")
 
-# st.write(
-#     "This app uses a CLIP image encoder (via `open_clip`) and a small MLP trained on "
-#     "Polyvore outfit pairs. The model predicts how compatible items are based on style. "
-#     "Training happens offline; this app only runs inference."
-# )
-
-# ---- Session state for persisting results ----
 if "pair_results" not in st.session_state:
     st.session_state["pair_results"] = None
 
@@ -38,13 +31,12 @@ if "matches_anchor_desc" not in st.session_state:
     st.session_state["matches_anchor_desc"] = ""
 
 if "outfit_results" not in st.session_state:
-    st.session_state["outfit_results"] = None  # dict with score, probs, labels, descs
+    st.session_state["outfit_results"] = None
 
 if "style_results" not in st.session_state:
     st.session_state["style_results"] = None
 
 if "outfit_items" not in st.session_state:
-    # Each item: {"name": str, "img": PIL.Image.Image, "desc": str}
     st.session_state["outfit_items"] = []
 
 
@@ -56,8 +48,6 @@ def _load_models_cached():
 
 clip_model, preprocess, classifier = _load_models_cached()
 
-
-# ---------- small helpers ----------
 
 def _load_dataset_image(rel_path: str) -> Image.Image:
     return Image.open(IMAGES_DIR / rel_path).convert("RGB")
@@ -108,7 +98,6 @@ def _llm_stylist_for_outfit(
     Ask the LLM to comment on a full outfit composed of N generic items.
     item_descriptions: list of strings like ["black crop top", "blue jeans", ...]
     """
-    # Build a bullet list of items
     if item_descriptions:
         items_text = "\n".join(
             f"- Item {i+1}: {desc or '[no description]'}"
@@ -185,9 +174,9 @@ Keep the tone concise and friendly.
 
 
 
-# ---------- UI ----------
+# UI and emoticons(were generated using AI to make the app more user friendly)
 
-#tab1, tab2 = st.tabs(["🔍 Check Pair", "🧩 Outfit Builder & Recommendations"])
+#tab1, tab2 = st.tabs([" Check Pair", " Outfit Builder & Recommendations"])
 tab1, tab2, tab3 = st.tabs(
     [
         "🧩 Build Outfit",
@@ -197,7 +186,7 @@ tab1, tab2, tab3 = st.tabs(
 )
 
 
-# ===== Tab 1: outfit builder & recommendations =====
+# Tab 1: outfit builder & recommendations
 with tab1:
     st.subheader("Rate my outfit")
     st.markdown(
@@ -212,7 +201,6 @@ with tab1:
         key="outfit_files",
     )
 
-    # Optional descriptions for each item (we'll create dynamic text inputs)
     item_descriptions: List[str] = []
 
     imgs: List[Image.Image] = []
@@ -234,7 +222,7 @@ with tab1:
     else:
         st.info("Upload at least two item images to rate an outfit.")
 
-    # Button to compute outfit score
+    # Button created to compute outfit score
     if imgs and len(imgs) >= 2:
         if st.button("Rate this outfit", key="rate_outfit_btn"):
             with st.spinner("Scoring outfit..."):
@@ -242,7 +230,6 @@ with tab1:
                     clip_model, preprocess, classifier, imgs
                 )
 
-                # If there are exactly 2 items, also compute CLIP sim + pair prob
                 pair_info = None
                 if len(imgs) == 2:
                     cos_sim, pair_prob = predict_pair(
@@ -253,17 +240,16 @@ with tab1:
                         "prob": float(pair_prob),
                     }
 
-            # Store results so they persist across reruns
             st.session_state["outfit_results"] = {
                 "descs": item_descriptions,
                 "probs": probs,
                 "score": float(outfit_score),
                 "n_items": len(imgs),
-                "pair": pair_info,  # None if more than 2 items
+                "pair": pair_info, 
             }
 
 
-    # ---- Show stored results (if any) ----
+    # ---- Stored results ----
     outfit_res = st.session_state.get("outfit_results")
     if outfit_res is not None:
         probs = outfit_res["probs"]
@@ -277,7 +263,7 @@ with tab1:
             f"{outfit_score:.2f}",
         )
 
-        # Interpret the score in a user-friendly way
+        # Interpreting the score in an user-friendly way
         rating_10 = outfit_score * 10.0
 
         if outfit_score >= 0.75:
@@ -296,7 +282,7 @@ with tab1:
                 f"Roughly **{rating_10:.1f}/10**; you might want to swap 1–2 items."
             )
 
-        # Build a simple table for pairwise compatibilities
+        # A table for pairwise compatibilities
         st.markdown("#### Pairwise compatibility matrix")
         item_labels = [f"Item {i+1}" for i in range(n)]
         import pandas as pd
@@ -329,7 +315,7 @@ with tab1:
         st.info("Once you rate an outfit, results will appear here.")
 
 
-# ===== Tab 2: Find Matches (shopping helper mode) =====
+# Tab 2: Finding Matches (shopping helper mode) 
 with tab2:
     st.subheader("Find matches for an item")
 
@@ -383,11 +369,11 @@ with tab2:
 
         if st.button("Find matches", key="find_matches_btn"):
             with st.spinner("Searching for compatible items..."):
-                # Get a candidate pool from the test split
+                # To get a candidate pool from the test split
                 try:
                     pool = list(get_test_image_pool())
                 except Exception:
-                    # Fallback: sample from pairs.csv
+                    # Fallback
                     pool = sample_test_images(num_candidates * 2)
 
                 if len(pool) > num_candidates:
@@ -457,7 +443,7 @@ Keep it concise and friendly.
         st.info("Upload an anchor item and click 'Find matches' to see recommendations.")
 
 
-# ===== Tab 3: Style & Color Analyzer =====
+# Tab 3: Style & Color Analyzer
 with tab3:
     st.subheader("Analyze style and color for a single item")
 
@@ -510,7 +496,7 @@ with tab3:
             with cc:
                 r, g, b = c["rgb"]
                 hex_code = c["hex"]
-                # Show a small color swatch using markdown + HTML
+                # Colour swatch using markdown + HTML
                 swatch_html = f"""
                 <div style="
                     width: 60px;
