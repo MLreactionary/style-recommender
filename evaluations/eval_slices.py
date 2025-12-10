@@ -14,14 +14,11 @@ from core import (
     predict_pair,
 )
 
-# Paths
 DATA_DIR = Path("data")
 PAIRS_PATH = DATA_DIR / "pairs.csv"
 RAW_POLY_DIR = DATA_DIR / "raw" / "polyvore_outfits"
 ITEM_META_PATH = RAW_POLY_DIR / "polyvore_item_metadata.json"
 
-
-# ---------- Utility: load pairs ----------
 
 def load_pairs(split: str, max_pairs: int | None = None) -> pd.DataFrame:
     df = pd.read_csv(PAIRS_PATH)
@@ -30,8 +27,6 @@ def load_pairs(split: str, max_pairs: int | None = None) -> pd.DataFrame:
         df = df.sample(n=max_pairs, random_state=42).reset_index(drop=True)
     return df
 
-
-# ---------- Utility: item metadata → categories ----------
 
 def load_img_to_category() -> dict:
     """
@@ -47,14 +42,13 @@ def load_img_to_category() -> dict:
     img_to_cat: dict[str, str] = {}
 
     for item_id, info in meta.items():
-        # image path
+
         img_path = info.get("image") or info.get("img") or ""
         if img_path.startswith("images/"):
             img_path = img_path[len("images/"):]
         if not img_path:
             img_path = f"{item_id}.jpg"
 
-        # category
         cat = (
             info.get("semantic_category")
             or info.get("category")
@@ -71,9 +65,6 @@ def load_img_to_category() -> dict:
 
 def annotate_categories(df: pd.DataFrame, img_to_cat: dict) -> pd.DataFrame:
     def get_cat(relpath: str) -> str:
-        # relpath in pairs.csv is something like "disjoint/train/...jpg" or just "12345.jpg"
-        # We only stored the tail when building outfits (e.g., "12345.jpg"),
-        # but to be safe, strip directory portions.
         rel = Path(relpath).name
         return img_to_cat.get(rel, "unknown")
 
@@ -101,9 +92,6 @@ def highlevel_cat(cat: str) -> str:
     if any(k in c for k in shoe_keywords):
         return "shoe"
     return "other"
-
-
-# ---------- Low-level color histogram (same as earlier) ----------
 
 def compute_color_hist(img_path: Path, cache: dict, bins: int = 8) -> np.ndarray:
     key = str(img_path)
@@ -148,8 +136,6 @@ def compute_color_scores(df: pd.DataFrame) -> np.ndarray:
     return np.array(scores)
 
 
-# ---------- CLIP + MLP scores ----------
-
 def compute_clip_scores(
     df: pd.DataFrame,
     clip_model,
@@ -180,8 +166,6 @@ def compute_clip_scores(
     return np.array(cos_sims), np.array(probs)
 
 
-# ---------- Threshold + eval ----------
-
 def best_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
     best_t = 0.5
     best_f1 = -1.0
@@ -206,8 +190,6 @@ def eval_model(scores: np.ndarray, labels: np.ndarray, threshold: float):
     return acc, f1, auc
 
 
-# ---------- Main: slice-based evaluation ----------
-
 def main(max_pairs: int | None = None, min_slice_size: int = 100):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     clip_model, preprocess, classifier = load_trained_models_for_inference()
@@ -218,7 +200,6 @@ def main(max_pairs: int | None = None, min_slice_size: int = 100):
     print(" SLICE-BASED EVALUATION (VAL→TEST)")
     print("==============================")
 
-    # ----- 1) Load val and tune thresholds globally -----
     df_val = load_pairs("val", max_pairs=max_pairs)
     print(f"Loaded {len(df_val)} validation pairs.")
 
@@ -236,14 +217,12 @@ def main(max_pairs: int | None = None, min_slice_size: int = 100):
     print(f"  CLIP cos  : {t_clip:.4f}")
     print(f"  MLP prob  : {t_mlp:.4f}")
 
-    # ----- 2) Load test + annotate categories -----
     df_test = load_pairs("test", max_pairs=max_pairs)
     print(f"\nLoaded {len(df_test)} test pairs.")
 
     img_to_cat = load_img_to_category()
     df_test = annotate_categories(df_test, img_to_cat)
 
-    # High-level category mapping
     df_test["cat1_high"] = df_test["cat1"].apply(highlevel_cat)
     df_test["cat2_high"] = df_test["cat2"].apply(highlevel_cat)
 
@@ -251,40 +230,32 @@ def main(max_pairs: int | None = None, min_slice_size: int = 100):
     color_test = compute_color_scores(df_test)
     cos_test, prob_test = compute_clip_scores(df_test, clip_model, preprocess, classifier)
 
-    # also compute median color sim for color-similar vs dissimilar slices
     median_color = float(np.median(color_test))
     print(f"\nMedian color similarity on TEST: {median_color:.4f}")
 
-    # ----- 3) Define slices -----
     masks = {}
 
-    # All test
     masks["all"] = np.ones(len(df_test), dtype=bool)
 
-    # Same raw category (ignoring 'unknown')
     same_cat = (df_test["cat1"] == df_test["cat2"]) & (df_test["cat1"] != "unknown")
     masks["same_raw_category"] = same_cat.values
 
-    # Different raw category (both known)
     diff_cat = (df_test["cat1"] != df_test["cat2"]) & (df_test["cat1"] != "unknown") & (df_test["cat2"] != "unknown")
     masks["different_raw_category"] = diff_cat.values
 
-    # Top-bottom combos (one top, one bottom)
     top_bottom = (
         ((df_test["cat1_high"] == "top") & (df_test["cat2_high"] == "bottom"))
         | ((df_test["cat1_high"] == "bottom") & (df_test["cat2_high"] == "top"))
     )
     masks["top_bottom_pairs"] = top_bottom.values
 
-    # Both shoes
+
     both_shoes = (df_test["cat1_high"] == "shoe") & (df_test["cat2_high"] == "shoe")
     masks["shoe_shoe_pairs"] = both_shoes.values
 
-    # Color-similar vs color-dissimilar
     masks["high_color_similarity"] = color_test >= median_color
     masks["low_color_similarity"] = color_test < median_color
 
-    # ----- 4) Evaluate on each slice -----
     results = {}
     for name, mask in masks.items():
         n = int(mask.sum())
@@ -313,7 +284,6 @@ def main(max_pairs: int | None = None, min_slice_size: int = 100):
             "mlp": {"acc": acc_mlp, "f1": f1_mlp, "auc": auc_mlp},
         }
 
-    # ----- 5) Save slice results -----
     out = {
         "thresholds": {
             "color_hist": float(t_color),
