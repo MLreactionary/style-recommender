@@ -10,15 +10,15 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 DATA_DIR = PROJECT_ROOT / "data"
 
 RAW_POLY_DIR = DATA_DIR / "raw" / "polyvore_outfits"
-IMAGES_DIR = RAW_POLY_DIR / "images"   # where all .jpg live
+IMAGES_DIR = RAW_POLY_DIR / "images"  
 PAIRS_CSV = DATA_DIR / "pairs.csv"
 
 ITEM_META_PATH = RAW_POLY_DIR / "polyvore_item_metadata.json"
 
 # For a quick prototype; set to None to use all outfits
 MAX_OUTFITS = 500
-NEG_RATIO = 1.0   # 1 negative pair per positive pair
-VAL_RATIO = 0.2   # 20% of train outfits -> val
+NEG_RATIO = 1.0   
+VAL_RATIO = 0.2   
 
 random.seed(42)
 
@@ -32,10 +32,8 @@ def load_item_metadata():
     id_to_img = {}
     for item_id, info in meta.items():
         img_path = info.get("image") or info.get("img") or ""
-        # Often stored as "images/123456.jpg" – strip leading "images/"
         if img_path.startswith("images/"):
             img_path = img_path[len("images/"):]
-        # Fall back to "<item_id>.jpg" if nothing else
         if not img_path:
             img_path = f"{item_id}.jpg"
         id_to_img[item_id] = img_path
@@ -56,7 +54,6 @@ def load_outfits_from_json(json_path: Path, id_to_img, max_outfits=None):
     for outfit in outfits_raw:
         items = []
 
-        # Typical structure: outfit["items"] is a list of {"item_id": "...", ...}
         for it in outfit.get("items", []):
             item_id = str(it.get("item_id"))
             if item_id not in id_to_img:
@@ -66,7 +63,6 @@ def load_outfits_from_json(json_path: Path, id_to_img, max_outfits=None):
             if img_path.exists():
                 items.append(img_rel)
 
-        # We only care about outfits with at least 2 valid items
         if len(items) >= 2:
             outfits.append(items)
 
@@ -121,12 +117,11 @@ def main():
     train_json = RAW_POLY_DIR / "disjoint" / "train.json"
     test_json  = RAW_POLY_DIR / "disjoint" / "test.json"
 
-    # Load *outfits* from train.json
     train_outfits_all = load_outfits_from_json(
         train_json, id_to_img, max_outfits=MAX_OUTFITS
     )
 
-    # Split train_outfits_all into train + val
+    
     n_total = len(train_outfits_all)
     n_val = max(1, int(n_total * VAL_RATIO))
     val_outfits = train_outfits_all[:n_val]
