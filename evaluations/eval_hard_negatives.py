@@ -28,9 +28,6 @@ def load_pairs(split: str, max_pairs: int | None = None) -> pd.DataFrame:
         df = df.sample(n=max_pairs, random_state=42).reset_index(drop=True)
     return df
 
-
-# ---------- Low-level color histogram (reuse idea from eval_lowlevel_baselines) ----------
-
 def compute_color_hist(img_path: Path, cache: dict, bins: int = 8) -> np.ndarray:
     key = str(img_path)
     if key in cache:
@@ -70,14 +67,11 @@ def compute_color_scores(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         h1 = compute_color_hist(img1_path, cache)
         h2 = compute_color_hist(img2_path, cache)
 
-        sim = float(np.dot(h1, h2))  # cosine since histograms are normalized
+        sim = float(np.dot(h1, h2)) 
         scores.append(sim)
         labels.append(int(row["label"]))
 
     return np.array(scores), np.array(labels)
-
-
-# ---------- CLIP + MLP scores (reuse predict_pair) ----------
 
 def compute_clip_scores(
     df: pd.DataFrame,
@@ -109,9 +103,6 @@ def compute_clip_scores(
             labels.append(int(row["label"]))
 
     return np.array(cos_sims), np.array(probs), np.array(labels)
-
-
-# ---------- Threshold & eval helpers ----------
 
 def best_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
     best_t = 0.5
@@ -155,7 +146,6 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
     clip_model.to(device)
     classifier.to(device)
 
-    # ---------- 1) TUNE THRESHOLDS ON VAL ----------
     print("\n==============================")
     print(" HARD NEGATIVE EVAL (VAL→TEST)")
     print("==============================")
@@ -163,9 +153,7 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
     df_val = load_pairs(split="val", max_pairs=max_pairs)
     print(f"Loaded {len(df_val)} validation pairs.")
 
-    # Color scores on val
     color_val, y_val = compute_color_scores(df_val)
-    # CLIP scores on val
     cos_val, prob_val, y_val2 = compute_clip_scores(df_val, clip_model, preprocess, classifier)
     assert np.array_equal(y_val, y_val2)
 
@@ -178,7 +166,6 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
     print(f"  CLIP cosine thresh  : {t_clip:.4f}")
     print(f"  MLP prob thresh     : {t_mlp:.4f}")
 
-    # ---------- 2) LOAD TEST & COMPUTE SCORES ----------
     df_test = load_pairs(split="test", max_pairs=max_pairs)
     print(f"\nLoaded {len(df_test)} test pairs.")
 
@@ -186,13 +173,11 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
     cos_test, prob_test, y_test2 = compute_clip_scores(df_test, clip_model, preprocess, classifier)
     assert np.array_equal(y_test, y_test2)
 
-    # ---------- 3) SELECT HARD NEGATIVES ----------
     neg_mask = (y_test == 0)
     pos_mask = (y_test == 1)
 
     color_neg = color_test[neg_mask]
 
-    # define hard negatives as those above percentile of color similarity
     thresh_hard = np.quantile(color_neg, hard_neg_percentile)
     hard_neg_indices = np.where(neg_mask & (color_test >= thresh_hard))[0]
 
@@ -203,7 +188,6 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
         print("No hard negatives found with this percentile; try lowering hard_neg_percentile.")
         return
 
-    # sample an equal number of positive pairs for a balanced hard subset
     pos_indices = np.where(pos_mask)[0]
     if len(pos_indices) < num_hard_neg:
         num_hard_neg = len(pos_indices)
@@ -217,7 +201,6 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
 
     print(f"Hard subset size: {len(subset_indices)} ({num_hard_neg} negatives, {num_hard_neg} positives)")
 
-    # ---------- 4) EVAL ON HARD SUBSET ----------
     color_hard = color_test[subset_indices]
     cos_hard = cos_test[subset_indices]
     prob_hard = prob_test[subset_indices]
@@ -226,7 +209,6 @@ def main(max_pairs: int | None = None, hard_neg_percentile: float = 0.8):
     clip_stats = eval_model(cos_hard, subset_labels, t_clip, name="CLIP cosine baseline (HARD TEST)")
     mlp_stats = eval_model(prob_hard, subset_labels, t_mlp, name="CLIP + MLP (HARD TEST)")
 
-    # ---------- 5) Save results ----------
     out = {
         "hard_neg_percentile": hard_neg_percentile,
         "val_num_pairs": int(len(df_val)),
