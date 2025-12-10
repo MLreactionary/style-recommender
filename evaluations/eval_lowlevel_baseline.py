@@ -7,7 +7,7 @@ import pandas as pd
 from PIL import Image
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
-from core import IMAGES_DIR  # just need this for image paths
+from core import IMAGES_DIR 
 
 
 DATA_DIR = Path("data")
@@ -27,9 +27,6 @@ def load_pairs(split: str, max_pairs: int | None = None) -> pd.DataFrame:
         df = df.sample(n=max_pairs, random_state=42).reset_index(drop=True)
     return df
 
-
-# ---------- Low-level feature: color histogram ----------
-
 def compute_color_hist(img_path: Path, cache: dict, bins: int = 8) -> np.ndarray:
     """
     Compute a simple HSV color histogram for an image and L2-normalize it.
@@ -41,9 +38,8 @@ def compute_color_hist(img_path: Path, cache: dict, bins: int = 8) -> np.ndarray
         return cache[key]
 
     img = Image.open(img_path).convert("RGB")
-    img = img.resize((128, 128))  # downsample to speed up
+    img = img.resize((128, 128))  
 
-    # Convert to HSV and compute histogram on each channel
     hsv = img.convert("HSV")
     arr = np.array(hsv)
 
@@ -57,7 +53,6 @@ def compute_color_hist(img_path: Path, cache: dict, bins: int = 8) -> np.ndarray
 
     hist = np.concatenate([hist_h, hist_s, hist_v]).astype(np.float32)
 
-    # L2-normalize
     norm = np.linalg.norm(hist) + 1e-8
     hist = hist / norm
 
@@ -84,16 +79,12 @@ def compute_color_scores(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         h1 = compute_color_hist(img1_path, cache)
         h2 = compute_color_hist(img2_path, cache)
 
-        # cosine similarity between normalized histograms
         sim = float(np.dot(h1, h2))
 
         scores.append(sim)
         labels.append(int(row["label"]))
 
     return np.array(scores), np.array(labels)
-
-
-# ---------- Generic helpers for threshold + metrics ----------
 
 def best_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
     """
@@ -145,7 +136,6 @@ def main(max_pairs: int | None = None):
     print("  (tuned on val, tested on test)")
     print("==============================")
 
-    # ---------- 1) TUNE THRESHOLD ON VAL ----------
     df_val = load_pairs(split="val", max_pairs=max_pairs)
     print(f"Loaded {len(df_val)} validation pairs.")
 
@@ -154,7 +144,6 @@ def main(max_pairs: int | None = None):
 
     print(f"\nChosen color-hist threshold (VAL): {t_color:.4f}")
 
-    # ---------- 2) EVALUATE ON TEST USING THAT THRESHOLD ----------
     df_test = load_pairs(split="test", max_pairs=max_pairs)
     print(f"\nLoaded {len(df_test)} test pairs.")
 
@@ -164,7 +153,7 @@ def main(max_pairs: int | None = None):
         scores_test, labels_test, t_color, name="Color histogram baseline (TEST)"
     )
 
-    # ---------- 3) Save results to JSON for later use ----------
+
     out = {
         "thresholds": {
             "color_hist": float(t_color),
