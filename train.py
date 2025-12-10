@@ -21,7 +21,7 @@ from core import (
 )
 
 BATCH_SIZE = 32
-NUM_EPOCHS = 5       # bump later if needed
+NUM_EPOCHS = 5       
 LR = 1e-3
 WEIGHT_DECAY = 1e-4
 RANDOM_SEED = 42
@@ -84,7 +84,6 @@ def main():
     clip_model, preprocess = load_clip_model()
     train_loader, val_loader = get_dataloaders(preprocess)
 
-    # open_clip: visual backbone output dimension
     embed_dim = clip_model.visual.output_dim
     classifier = CompatibilityMLP(embed_dim=embed_dim).to(DEVICE)
 
