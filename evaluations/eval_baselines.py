@@ -61,11 +61,9 @@ def compute_scores(
             img1_path = IMAGES_DIR / row["img1"]
             img2_path = IMAGES_DIR / row["img2"]
 
-            # Load as PIL images
             img1 = Image.open(img1_path).convert("RGB")
             img2 = Image.open(img2_path).convert("RGB")
 
-            # Reuse your existing helper: returns (cos_sim, prob)
             cos_sim, prob = predict_pair(
             clip_model, preprocess, classifier, img1, img2
             )
@@ -86,7 +84,6 @@ def best_threshold(scores: np.ndarray, labels: np.ndarray) -> float:
     best_t = 0.5
     best_f1 = -1.0
 
-    # Try thresholds between min and max
     ts = np.linspace(scores.min(), scores.max(), num=200)
     for t in ts:
         preds = (scores >= t).astype(int)
@@ -119,14 +116,13 @@ def eval_model(scores: np.ndarray, labels: np.ndarray, threshold: float, name: s
 def main(max_pairs: int | None = None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Load trained models
     clip_model, preprocess, classifier = load_trained_models_for_inference()
     clip_model.to(device)
     classifier.to(device)
     clip_model.eval()
     classifier.eval()
 
-    # ---------- 1) TUNE THRESHOLDS ON VALID ----------
+
     print("\n======================")
     print(" TUNING ON VALIDATION ")
     print("======================")
@@ -143,7 +139,7 @@ def main(max_pairs: int | None = None):
     print(f"  CLIP baseline threshold: {t_clip:.4f}")
     print(f"  MLP  baseline threshold: {t_prob:.4f}")
 
-    # ---------- 2) EVALUATE ON TEST USING THOSE THRESHOLDS ----------
+
     print("\n=================")
     print(" TEST EVALUATION ")
     print("=================")
